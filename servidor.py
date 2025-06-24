@@ -1,5 +1,8 @@
 from fastapi import FastAPI, WebSocket
-from utilidades.camara import capturarFotogramaJpg, camara
+from utilidades.camara import (
+    capturarFotogramaJpg,
+    obtenerControlesCamara,
+)
 from starlette.websockets import WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -18,17 +21,7 @@ aplicacion.add_middleware(
 
 @aplicacion.get("/controles")
 async def obtener_controles():
-    controles = {}
-    for nombre, info in camara.camera_controls.items():
-        control = {
-            "type": str(info[0]),
-            "default": info[1] if len(info) > 1 else None,
-            "min": info[2] if len(info) > 2 else None,
-            "max": info[3] if len(info) > 3 else None,
-            "step": info[4] if len(info) > 4 else None,
-        }
-        controles[nombre] = control
-    return controles
+    return obtenerControlesCamara()
 
 
 @aplicacion.websocket("/ws")
@@ -37,9 +30,10 @@ async def camaraEnVivo(websocket: WebSocket):
     try:
         while True:
             fotograma = capturarFotogramaJpg()
-            fotograma_b64 = base64.b64encode(fotograma).decode("utf-8")
-            await websocket.send_text(fotograma_b64)
+            fotogramaB64 = base64.b64encode(fotograma).decode("utf-8")
+            await websocket.send_text(fotogramaB64)
             await asyncio.sleep(0.05)  # 20 fps aprox
+
     except WebSocketDisconnect:
         print("Cliente desconectado.")
     except Exception as e:
