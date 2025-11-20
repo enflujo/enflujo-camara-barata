@@ -1,11 +1,12 @@
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, Body
 from utilidades.camara import (
     capturarFotogramaJpg,
     obtenerControlesCamara,
+    establecerControl,
+    establecerMultiplesControles,
 )
 from starlette.websockets import WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-
 import asyncio
 import base64
 
@@ -38,3 +39,19 @@ async def camaraEnVivo(websocket: WebSocket):
         print("Cliente desconectado.")
     except Exception as e:
         print(f"Error en WebSocket: {e}")
+
+
+@aplicacion.post("/controlar")
+async def controlar(payload: dict = Body(...)):
+    try:
+        return establecerControl(payload["nombre"], payload["valor"])
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@aplicacion.post("/controlar-multiples")
+async def controlar_multiples(payload: dict = Body(...)):
+    try:
+        return establecerMultiplesControles(payload)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

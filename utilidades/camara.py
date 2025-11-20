@@ -90,34 +90,114 @@ SyncFrames: Cuando las cámaras están en modo de sincronización, este valor se
 camara = Picamera2()
 
 if not camara.started:
-    camara.configure(
-        camara.create_preview_configuration(
-            main={"format": "RGB888", "size": (640, 480)}
-        )
+    config = camara.create_preview_configuration(
+        main={"format": "RGB888", "size": (640, 480)}
+    )
+    camara.align_configuration(config)
+    camara.configure(config)
+
+    camara.set_controls(
+        {
+            "AwbEnable": True,
+            "AwbMode": 0,  # Auto
+            "AeEnable": True,
+            "HdrMode": 0,
+            "Saturation": 1.0,
+            "Contrast": 1.0,
+            "Sharpness": 1.0,
+        }
     )
     camara.start()
+    print(camara.camera_controls["ScalerCrop"])
 
 
 def capturarFotogramaJpg():
-    fotograma = camara.capture_array()
-    img = Image.fromarray(fotograma)
+    """
+    Obtiene un fotograma en JPEG desde la cámara.
+    Picamera2 devuelve los bytes en BGR aunque se especifique RGB888,
+    por lo tanto se convierte manualmente a RGB antes de convertir a JPEG.
+    """
+
+    fotograma = camara.capture_array()  # Buffer BGR de libcamera
+    # Convertimos BGR → RGB (forma eficiente)
+    fotograma = fotograma[..., ::-1]
+
+    img = Image.fromarray(fotograma, "RGB")
+
     buffer = io.BytesIO()
     img.save(buffer, format="JPEG", quality=85)
+
     return buffer.getvalue()
 
 
 def obtenerControlesCamara():
     controles = {}
+
     for nombre, info in camara.camera_controls.items():
+        minimo, maximo, pred = info
+
         control = {
-            "tipo": str(info[0]),
-            "predeterminado": info[1] if len(info) > 1 else None,
-            "min": info[2] if len(info) > 2 else None,
-            "max": info[3] if len(info) > 3 else None,
-            "paso": info[4] if len(info) > 4 else None,
+            "min": minimo,
+            "max": maximo,
+            "predeterminado": pred,
         }
         controles[nombre] = control
+
     return controles
+
+
+def _convertir_valor(valor, minimo):
+    """
+    Convierte un valor al tipo adecuado según el tipo del mínimo.
+    """
+    # booleano
+    if isinstance(minimo, bool):
+        if isinstance(valor, str):
+            return valor.lower() in ("true", "1", "yes", "on")
+        return bool(valor)
+
+    # array / lista / tupla
+    if isinstance(minimo, (list, tuple)):
+        return [_convertir_valor(v, minimo[0]) for v in valor]
+
+    # entero
+    if isinstance(minimo, int):
+        return int(valor)
+
+    # flotante
+    return float(valor)
+
+
+def _validar_rango(nombre, valor, minimo, maximo):
+    # No validar controles sin rango real
+    if minimo is None or maximo is None:
+        return
+
+    # Validación de array (ScalerCrop, ColourGains, etc.)
+    if isinstance(minimo, (list, tuple)):
+        for i, v in enumerate(valor):
+
+            # NO validar offsets (posición X/Y)
+            if i in (0, 1):
+                continue
+
+            min_i = minimo[i]
+            max_i = maximo[i]
+
+            if min_i is None or max_i is None:
+                continue
+
+            if v < min_i or v > max_i:
+                raise ValueError(
+                    f"Elemento {i} de {nombre} fuera de rango: {v} "
+                    f"(min={min_i}, max={max_i})"
+                )
+    else:
+        if valor < minimo or valor > maximo:
+            raise ValueError(
+                f"Valor fuera de rango para {nombre}: {valor} "
+                f"(min={minimo}, max={maximo})"
+            )
 
 
 def detenerCamara():
@@ -134,3 +214,47 @@ def iniciarCamara():
         print("Cámara iniciada.")
     else:
         print("La cámara ya está en funcionamiento.")
+
+
+def establecerControl(nombre, valor):
+    """
+    Ajusta un control de la cámara validando rango y tipo.
+    Ejemplos de uso:
+        establecerControl("ExposureTime", 8000)
+        establecerControl("AnalogueGain", 1.5)
+    """
+
+    if nombre == "ScalerCrop" and not isinstance(valor, (list, tuple)):
+        raise ValueError("ScalerCrop debe ser una lista de 4 elementos.")
+
+    controles = camara.camera_controls
+
+    if nombre not in controles:
+        raise ValueError(f"Control '{nombre}' no existe.")
+
+    minimo, maximo, _ = controles[nombre]
+
+    valor_cast = _convertir_valor(valor, minimo)
+    _validar_rango(nombre, valor_cast, minimo, maximo)
+
+    camara.set_controls({nombre: valor_cast})
+    return {"ok": True, "nombre": nombre, "valor": valor_cast}
+
+
+def establecerMultiplesControles(datos: dict):
+    controles = camara.camera_controls
+    cambios = {}
+
+    for nombre, valor in datos.items():
+        if nombre not in controles:
+            raise ValueError(f"Control '{nombre}' no existe.")
+
+        minimo, maximo, _ = controles[nombre]
+
+        valor_cast = _convertir_valor(valor, minimo)
+        _validar_rango(nombre, valor_cast, minimo, maximo)
+
+        cambios[nombre] = valor_cast
+
+    camara.set_controls(cambios)
+    return {"ok": True, "cambios": cambios}
